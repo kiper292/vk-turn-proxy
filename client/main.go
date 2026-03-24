@@ -453,7 +453,7 @@ func dtlsFunc(ctx context.Context, conn net.PacketConn, peer *net.UDPAddr) (net.
 	return dtlsConn, nil
 }
 
-func oneDtlsConnection(ctx context.Context, peer *net.UDPAddr, listenConn net.PacketConn, connchan chan<- net.PacketConn, okchan chan<- struct{}, c chan<- error, sessionID []byte) {
+func oneDtlsConnection(ctx context.Context, peer *net.UDPAddr, listenConn net.PacketConn, connchan chan<- net.PacketConn, okchan chan<- struct{}, c chan<- error, sessionID []byte, streamID byte) {
 	var err error = nil
 	defer func() { c <- err }()
 	dtlsctx, dtlscancel := context.WithCancel(ctx)
@@ -482,14 +482,17 @@ func oneDtlsConnection(ctx context.Context, peer *net.UDPAddr, listenConn net.Pa
 		log.Printf("Closed DTLS connection\n")
 	}()
 
-	// Phase 1: Send Session ID
+	// Phase 1: Send Session ID + Stream ID (17 bytes)
 	dtlsConn.SetWriteDeadline(time.Now().Add(time.Second * 5))
-	if _, err1 = dtlsConn.Write(sessionID); err1 != nil {
+	idBuf := make([]byte, 17)
+	copy(idBuf[:16], sessionID)
+	idBuf[16] = streamID
+	if _, err1 = dtlsConn.Write(idBuf); err1 != nil {
 		err = fmt.Errorf("failed to send session ID: %s", err1)
 		return
 	}
 
-	log.Printf("Established DTLS connection and sent session ID!\n")
+	log.Printf("Established DTLS connection and sent session ID with stream %d!\n", streamID)
 	go func() {
 		for {
 			select {
@@ -766,14 +769,14 @@ func oneTurnConnection(ctx context.Context, turnParams *turnParams, peer *net.UD
 	conn2.SetDeadline(time.Time{})
 }
 
-func oneDtlsConnectionLoop(ctx context.Context, peer *net.UDPAddr, listenConnChan <-chan net.PacketConn, connchan chan<- net.PacketConn, okchan chan<- struct{}, sessionID []byte) {
+func oneDtlsConnectionLoop(ctx context.Context, peer *net.UDPAddr, listenConnChan <-chan net.PacketConn, connchan chan<- net.PacketConn, okchan chan<- struct{}, sessionID []byte, streamID byte) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case listenConn := <-listenConnChan:
 			c := make(chan error)
-			go oneDtlsConnection(ctx, peer, listenConn, connchan, okchan, c, sessionID)
+			go oneDtlsConnection(ctx, peer, listenConn, connchan, okchan, c, sessionID, streamID)
 			if err := <-c; err != nil {
 				log.Printf("%s", err)
 			}
@@ -913,7 +916,7 @@ func main() { //nolint:cyclop
 		wg1.Add(1)
 		go func() {
 			defer wg1.Done()
-			oneDtlsConnectionLoop(ctx, peer, listenConnChan, connchan, okchan, sessionID)
+			oneDtlsConnectionLoop(ctx, peer, listenConnChan, connchan, okchan, sessionID, 0)
 		}()
 
 		wg1.Add(1)
@@ -929,10 +932,10 @@ func main() { //nolint:cyclop
 		for i := 0; i < *n-1; i++ {
 			connchan := make(chan net.PacketConn)
 			wg1.Add(1)
-			go func() {
+			go func(streamID byte) {
 				defer wg1.Done()
-				oneDtlsConnectionLoop(ctx, peer, listenConnChan, connchan, nil, sessionID)
-			}()
+				oneDtlsConnectionLoop(ctx, peer, listenConnChan, connchan, nil, sessionID, streamID)
+			}(byte(i + 1))
 			wg1.Add(1)
 			go func() {
 				defer wg1.Done()
