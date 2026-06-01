@@ -45,6 +45,13 @@ client/
 ./server -listen 0.0.0.0:56000 -connect 127.0.0.1:<порт wg>
 ```
 
+WRAP-режим дополнительно шифрует DTLS-пакеты перед отправкой в TURN ChannelData. Сгенерируйте общий ключ и передайте его серверу и совместимому клиенту:
+
+```
+./server -gen-wrap-key
+./server -listen 0.0.0.0:56000 -connect 127.0.0.1:<порт wg> -wrap -wrap-key <64-символьный hex-ключ>
+```
+
 ### Клиент
 
 #### Android

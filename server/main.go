@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -103,7 +105,7 @@ func (s *UserSession) backendReaderLoop() {
 			log.Printf("Session %s DTLS write error: %v", s.ID, err)
 			conn.Close()
 		}
-    }
+	}
 }
 
 func (s *UserSession) AddConn(id byte, conn net.Conn) {
@@ -151,7 +153,19 @@ func (s *UserSession) Cleanup() {
 func main() {
 	listen := flag.String("listen", "0.0.0.0:56000", "listen on ip:port")
 	connect := flag.String("connect", "", "connect to ip:port")
+	wrapMode := flag.Bool("wrap", false, "WRAP mode: SRTP-like AEAD obfuscation for DTLS packets before they reach TURN ChannelData")
+	wrapKeyHex := flag.String("wrap-key", "", "32-byte hex-encoded shared key for -wrap (64 hex chars)")
+	genWrapKey := flag.Bool("gen-wrap-key", false, "print a fresh 64-character hex key for -wrap-key and exit")
 	flag.Parse()
+
+	if *genWrapKey {
+		key := make([]byte, wrapKeyLen)
+		if _, err := rand.Read(key); err != nil {
+			log.Panicf("gen-wrap-key: rand.Read: %v", err)
+		}
+		fmt.Println(hex.EncodeToString(key))
+		return
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -172,6 +186,19 @@ func main() {
 	if len(*connect) == 0 {
 		log.Panicf("server address is required")
 	}
+	var wrapKey []byte
+	if *wrapMode {
+		if *wrapKeyHex == "" {
+			log.Panicf("-wrap requires -wrap-key")
+		}
+		wrapKey, err = hex.DecodeString(*wrapKeyHex)
+		if err != nil {
+			log.Panicf("-wrap-key invalid hex: %v", err)
+		}
+		if len(wrapKey) != wrapKeyLen {
+			log.Panicf("-wrap-key must decode to %d bytes (got %d)", wrapKeyLen, len(wrapKey))
+		}
+	}
 
 	certificate, genErr := selfsign.GenerateSelfSigned()
 	if genErr != nil {
@@ -185,7 +212,17 @@ func main() {
 		ConnectionIDGenerator: dtls.RandomCIDGenerator(8),
 	}
 
-	listener, err := dtls.Listen("udp", addr, config)
+	var listener net.Listener
+	if *wrapMode {
+		log.Printf("WRAP mode enabled: listener only accepts clients with matching -wrap-key")
+		wrapListener, wrapErr := listenWrapped(addr, wrapKey)
+		if wrapErr != nil {
+			panic(wrapErr)
+		}
+		listener, err = dtls.NewListener(wrapListener, config)
+	} else {
+		listener, err = dtls.Listen("udp", addr, config)
+	}
 	if err != nil {
 		panic(err)
 	}

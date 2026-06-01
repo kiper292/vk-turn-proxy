@@ -44,6 +44,13 @@ You will need:
 ./server -listen 0.0.0.0:56000 -connect 127.0.0.1:<wg_port>
 ```
 
+WRAP mode additionally encrypts DTLS packets before they are sent through TURN ChannelData. Generate a shared key and pass it to the server and a compatible client:
+
+```bash
+./server -gen-wrap-key
+./server -listen 0.0.0.0:56000 -connect 127.0.0.1:<wg_port> -wrap -wrap-key <64-character-hex-key>
+```
+
 ### Client
 
 #### Android
